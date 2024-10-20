@@ -63,3 +63,8 @@ export const useAuth = () => {
   }
   return context;
 };
+
+// Add this new function to get the authentication token
+export const getAuthToken = () => {
+  return localStorage.getItem('token');
+};
