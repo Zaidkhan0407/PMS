@@ -9,6 +9,8 @@ import os
 from PyPDF2 import PdfReader
 from huggingface_hub import InferenceClient
 import re
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 load_dotenv()
 
@@ -53,6 +55,40 @@ Generate 5 interview questions that are specific to the candidate's experience, 
     except Exception as e:
         print(f"Error generating interview questions: {str(e)}")
         return []
+
+# Function to recommend jobs based on resume content
+def recommend_jobs(resume_text):
+    # Fetch all jobs from the database
+    jobs = list(mongo.db.companies.find())
+    
+    # Prepare the documents for TF-IDF vectorization
+    documents = [resume_text] + [f"{job['name']} {job['position']} {job['description']} {job['requirements']}" for job in jobs]
+    
+    # Create TF-IDF vectorizer
+    vectorizer = TfidfVectorizer(stop_words='english')
+    tfidf_matrix = vectorizer.fit_transform(documents)
+    
+    # Calculate cosine similarity between resume and jobs
+    cosine_similarities = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:]).flatten()
+    
+    # Sort jobs by similarity score
+    job_scores = list(enumerate(cosine_similarities))
+    job_scores = sorted(job_scores, key=lambda x: x[1], reverse=True)
+    
+    # Get top 5 recommended jobs
+    recommended_jobs = []
+    for idx, score in job_scores[:5]:
+        job = jobs[idx]
+        recommended_jobs.append({
+            'id': str(job['_id']),
+            'name': job['name'],
+            'position': job['position'],
+            'description': job['description'],
+            'requirements': job['requirements'],
+            'similarity_score': score
+        })
+    
+    return recommended_jobs
 
 @app.route("/api/signup", methods=["POST"])
 def signup():
@@ -139,6 +175,9 @@ def analyze_resume():
         elif action == 'questions':
             questions = generate_interview_questions(resume_text)
             return jsonify({'questions': questions, 'resume_text': resume_text})
+        elif action == 'recommend_jobs':
+            recommended_jobs = recommend_jobs(resume_text)
+            return jsonify({'recommended_jobs': recommended_jobs})
         else:
             return jsonify({'error': 'Invalid action'}), 400
 
@@ -157,6 +196,7 @@ def analyze_resume():
             return jsonify({'error': 'An error occurred during resume analysis'}), 500
     else:
         return jsonify({'error': 'Invalid file type'}), 400
+
 
 @app.route("/api/interview-prep", methods=["POST"])
 @jwt_required()
