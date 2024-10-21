@@ -6,6 +6,9 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 from bson import ObjectId
 import os
+from PyPDF2 import PdfReader
+from huggingface_hub import InferenceClient
+import re
 
 load_dotenv()
 
@@ -15,6 +18,41 @@ app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 mongo = PyMongo(app)
 jwt = JWTManager(app)
 CORS(app)
+
+# Initialize Hugging Face client
+huggingface_token = os.getenv("HUGGINGFACE_TOKEN")
+client = InferenceClient(token=huggingface_token)
+
+# Function to extract text from the uploaded PDF resume
+def extract_text_from_pdf(pdf_file):
+    reader = PdfReader(pdf_file)
+    text = ""
+    for page in reader.pages:
+        text += page.extract_text()
+    return text
+
+# Function to generate interview questions based on resume content
+def generate_interview_questions(resume_text):
+    prompt = f"""Based on the following resume, generate 5 relevant interview questions:
+
+{resume_text}
+
+Generate 5 interview questions that are specific to the candidate's experience, skills, and background. Each question should be on a new line and start with 'Q: '."""
+
+    try:
+        response = client.text_generation(
+            prompt,
+            model="meta-llama/Llama-3.2-3B-Instruct",
+            max_new_tokens=500,
+            temperature=0.7,
+            top_k=50,
+            top_p=0.95,
+        )
+        questions = re.findall(r'Q: (.+)', response)
+        return questions
+    except Exception as e:
+        print(f"Error generating interview questions: {str(e)}")
+        return []
 
 @app.route("/api/signup", methods=["POST"])
 def signup():
@@ -80,6 +118,89 @@ def companies():
         data = request.json
         company_id = mongo.db.companies.insert_one(data).inserted_id
         return jsonify({"id": str(company_id)}), 201
+
+@app.route("/api/analyze-resume", methods=["POST"])
+@jwt_required()
+def analyze_resume():
+    if 'resume' not in request.files:
+        return jsonify({'error': 'No resume file provided'}), 400
+
+    resume_file = request.files['resume']
+    action = request.form.get('action')
+
+    if resume_file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+
+    if resume_file and allowed_file(resume_file.filename):
+        resume_text = extract_text_from_pdf(resume_file)
+
+        if action == 'improve':
+            prompt = f"I have the following resume, please suggest me some ideas to improve my skills:\n{resume_text}\nBased on this resume, recommend me 5 improvements.\nJust Output me the improvements Nothing Else"
+        elif action == 'questions':
+            questions = generate_interview_questions(resume_text)
+            return jsonify({'questions': questions, 'resume_text': resume_text})
+        else:
+            return jsonify({'error': 'Invalid action'}), 400
+
+        try:
+            response = client.text_generation(
+                prompt,
+                model="meta-llama/Llama-3.2-3B-Instruct",
+                max_new_tokens=500,
+                temperature=0.7,
+                top_k=50,
+                top_p=0.95,
+            )
+            return jsonify({'result': response})
+        except Exception as e:
+            print(f"Error calling Hugging Face API: {str(e)}")
+            return jsonify({'error': 'An error occurred during resume analysis'}), 500
+    else:
+        return jsonify({'error': 'Invalid file type'}), 400
+
+@app.route("/api/interview-prep", methods=["POST"])
+@jwt_required()
+def interview_prep():
+    data = request.json
+    resume_text = data.get('resume_text')
+    question = data.get('question')
+    answer = data.get('answer')
+
+    if not resume_text or not question or not answer:
+        return jsonify({'error': 'Missing required fields'}), 400
+
+    prompt = f"""Based on the following resume:
+
+{resume_text}
+
+For the interview question: "{question}"
+
+The candidate's answer was: "{answer}"
+
+Please provide constructive feedback and suggestions for improvement. Focus on:
+1. The relevance of the answer to the question
+2. The clarity and structure of the response
+3. Any missing key points or experiences from the resume that could have been mentioned
+4. Suggestions for better articulation or presentation of ideas
+
+Provide your feedback in a clear, concise manner with specific points for improvement."""
+
+    try:
+        response = client.text_generation(
+            prompt,
+            model="meta-llama/Llama-3.2-3B-Instruct",
+            max_new_tokens=500,
+            temperature=0.7,
+            top_k=50,
+            top_p=0.95,
+        )
+        return jsonify({'result': response})
+    except Exception as e:
+        print(f"Error calling Hugging Face API: {str(e)}")
+        return jsonify({'error': 'An error occurred during interview preparation'}), 500
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in {'pdf'}
 
 if __name__ == "__main__":
     app.run(debug=True)
