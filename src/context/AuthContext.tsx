@@ -1,6 +1,7 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import axios from 'axios';
 
+
 interface User {
   id: string;
   email: string;
@@ -15,7 +16,7 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
 
@@ -42,7 +43,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.setItem('token', 'tpo-token');
       setUser(tpoUser);
     } else {
-      const response = await axios.post('http://localhost:5000/api/login', { email, password });
+      const response = await axios.post(`${API_URL}/api/login`, { email, password });
       localStorage.setItem('token', response.data.token);
       setUser(response.data.user);
     }

@@ -1,3 +1,4 @@
+import os
 from flask import Flask, request, jsonify
 from flask_pymongo import PyMongo
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
@@ -5,7 +6,6 @@ from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 from bson import ObjectId
-import os
 from PyPDF2 import PdfReader
 from huggingface_hub import InferenceClient
 import re
@@ -242,6 +242,6 @@ Provide your feedback in a clear, concise manner with specific points for improv
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in {'pdf'}
 
-if __name__ == '__main__':
-    port = int(os.getenv("PORT", 5000))  # Default to 5000 if PORT is not set
-    app.run(host='0.0.0.0', port=port)
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
