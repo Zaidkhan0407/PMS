@@ -11,7 +11,7 @@ interface AuthContextType {
   user: User | null;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
-  signup: (email: string, password: string, role: 'student' | 'tpo') => Promise<void>;
+  signup: (email: string, password: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -33,9 +33,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const login = async (email: string, password: string) => {
-    const response = await axios.post('http://localhost:5000/api/login', { email, password });
-    localStorage.setItem('token', response.data.token);
-    setUser(response.data.user);
+    if (email === 'TPO@gmail.com' && password === '123') {
+      const tpoUser: User = {
+        id: 'tpo-id',
+        email: 'TPO@gmail.com',
+        role: 'tpo'
+      };
+      localStorage.setItem('token', 'tpo-token');
+      setUser(tpoUser);
+    } else {
+      const response = await axios.post('http://localhost:5000/api/login', { email, password });
+      localStorage.setItem('token', response.data.token);
+      setUser(response.data.user);
+    }
   };
 
   const logout = () => {
@@ -43,8 +53,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(null);
   };
 
-  const signup = async (email: string, password: string, role: 'student' | 'tpo') => {
-    const response = await axios.post('http://localhost:5000/api/signup', { email, password, role });
+  const signup = async (email: string, password: string) => {
+    if (email === 'TPO@gmail.com') {
+      throw new Error('This email is reserved for TPO use.');
+    }
+    const response = await axios.post('http://localhost:5000/api/signup', { email, password, role: 'student' });
     localStorage.setItem('token', response.data.token);
     setUser(response.data.user);
   };
@@ -64,7 +77,6 @@ export const useAuth = () => {
   return context;
 };
 
-// Add this new function to get the authentication token
 export const getAuthToken = () => {
   return localStorage.getItem('token');
 };
