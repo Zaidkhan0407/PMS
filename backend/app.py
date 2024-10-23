@@ -15,11 +15,40 @@ from sklearn.metrics.pairwise import cosine_similarity
 load_dotenv()
 
 app = Flask(__name__)
+
+# Configure MongoDB
 app.config["MONGO_URI"] = os.getenv("MONGO_URI")
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
+
+# Initialize extensions
 mongo = PyMongo(app)
 jwt = JWTManager(app)
-CORS(app)
+
+# Configure CORS for production
+CORS(app, resources={
+    r"/api/*": {
+        "origins": [
+            "https://your-netlify-app-url.netlify.app",  # Replace with your Netlify URL
+            "http://localhost:5173",  # Development URL
+            "http://localhost:4173"   # Vite preview URL
+        ],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
+
+# Error handling
+@app.errorhandler(Exception)
+def handle_error(error):
+    return jsonify({
+        "error": str(error),
+        "message": "An internal error occurred"
+    }), 500
+
+# Health check endpoint
+@app.route("/health", methods=["GET"])
+def health_check():
+    return jsonify({"status": "healthy"}), 200
 
 # Initialize Hugging Face client
 huggingface_token = os.getenv("HUGGINGFACE_TOKEN")
