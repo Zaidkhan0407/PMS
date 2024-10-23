@@ -28,15 +28,28 @@ jwt = JWTManager(app)
 CORS(app, resources={
     r"/api/*": {
         "origins": [
-            "https://671745327adbd0655aeb08b7--ai-placement-management-system.netlify.app/",  # Replace with your Netlify URL
-            "http://localhost:5173",  # Development URL
-            "http://localhost:4173"   # Vite preview URL
+            "https://671745327adbd0655aeb08b7--ai-placement-management-system.netlify.app",
+            "http://localhost:5173",
+            "http://localhost:4173"
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
     }
 })
 
+# Root route
+@app.route("/")
+def home():
+    return jsonify({
+        "message": "AI Placement Management System API",
+        "status": "running",
+        "endpoints": {
+            "auth": ["/api/login", "/api/signup"],
+            "resume": ["/api/analyze-resume"],
+            "interview": ["/api/interview-prep"],
+            "jobs": ["/api/companies"]
+        }
+    })
 # Error handling
 @app.errorhandler(Exception)
 def handle_error(error):
