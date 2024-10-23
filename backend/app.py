@@ -28,7 +28,7 @@ jwt = JWTManager(app)
 CORS(app, resources={
     r"/api/*": {
         "origins": [
-            "https://your-netlify-app-url.netlify.app",  # Replace with your Netlify URL
+            "https://671745327adbd0655aeb08b7--ai-placement-management-system.netlify.app/",  # Replace with your Netlify URL
             "http://localhost:5173",  # Development URL
             "http://localhost:4173"   # Vite preview URL
         ],
