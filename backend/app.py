@@ -14,30 +14,48 @@ from huggingface_hub import InferenceClient
 import re
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import time
+from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 
 load_dotenv()
 
 app = Flask(__name__)
 
-# Configure MongoDB and JWT
-app.config["MONGO_URI"] = os.getenv("MONGO_URI")
-app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
+# MongoDB Configuration with optimized settings
+def get_mongo_client():
+    try:
+        # Configure MongoDB with optimized connection pool
+        client = MongoClient(
+            os.getenv("MONGO_URI"),
+            serverSelectionTimeoutMS=5000,  # Reduce server selection timeout
+            connectTimeoutMS=5000,          # Reduce connection timeout
+            socketTimeoutMS=5000,           # Reduce socket timeout
+            maxPoolSize=50,                 # Optimize connection pool
+            minPoolSize=10,                 # Maintain minimum connections
+            maxIdleTimeMS=50000,           # Reduce idle connection time
+            waitQueueTimeoutMS=5000        # Reduce wait queue timeout
+        )
+        # Test connection
+        client.admin.command('ping')
+        print("MongoDB connection successful!")
+        return client
+    except (ConnectionFailure, ServerSelectionTimeoutError) as e:
+        print(f"Could not connect to MongoDB: {e}")
+        raise
 
-print(f"MongoDB URI: {app.config['MONGO_URI']}")  # Debug print
-
-# Initialize extensions
 try:
-    mongo = PyMongo(app)
-    # Test the connection
-    mongo.db.command('ping')
-    print("MongoDB connection successful!")
+    mongo_client = get_mongo_client()
+    db = mongo_client.get_database('placement_management_system')
 except Exception as e:
-    print(f"MongoDB connection error: {str(e)}")
-    raise e
+    print(f"Fatal MongoDB connection error: {str(e)}")
+    raise
 
+# Configure JWT
+app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 jwt = JWTManager(app)
 
-# Configure CORS with more specific settings
+# Configure CORS with specific origins
 CORS(app, resources={
     r"/api/*": {
         "origins": ["http://localhost:5173", "http://localhost:4173"],
@@ -53,44 +71,40 @@ client = InferenceClient(os.getenv("HUGGINGFACE_TOKEN"))
 @app.route("/api/test", methods=["GET"])
 def test_route():
     try:
-        # Test MongoDB connection
-        mongo.db.users.find_one({})
-        return jsonify({"message": "Backend is working correctly"}), 200
+        db.users.find_one({})
+        return jsonify({"message": "Backend is working correctly", "status": "success"}), 200
     except Exception as e:
-        return jsonify({"error": f"Database error: {str(e)}"}), 500
+        return jsonify({"error": f"Database error: {str(e)}", "status": "error"}), 500
 
 @app.route("/api/signup", methods=["POST"])
 def signup():
     try:
         data = request.get_json()
         if not data:
-            return jsonify({"error": "No data provided"}), 400
+            return jsonify({"error": "No data provided", "status": "error"}), 400
 
         email = data.get("email")
         password = data.get("password")
         
-        print(f"Signup attempt - Email: {email}")  # Debug print
-        
         if not email or not password:
-            return jsonify({"error": "Email and password are required"}), 400
+            return jsonify({"error": "Email and password are required", "status": "error"}), 400
             
-        existing_user = mongo.db.users.find_one({"email": email})
+        # Use find_one with projection to optimize query
+        existing_user = db.users.find_one({"email": email}, {"_id": 1})
         if existing_user:
-            return jsonify({"error": "Email already exists"}), 400
+            return jsonify({"error": "Email already exists", "status": "error"}), 400
             
         hashed_password = generate_password_hash(password)
         new_user = {
             "email": email,
             "password": hashed_password,
-            "role": "student"
+            "role": "student",
+            "created_at": time.time()
         }
         
-        result = mongo.db.users.insert_one(new_user)
+        result = db.users.insert_one(new_user)
         user_id = str(result.inserted_id)
-        
         token = create_access_token(identity=user_id)
-        
-        print(f"User created successfully - ID: {user_id}")  # Debug print
         
         return jsonify({
             "token": token,
@@ -98,29 +112,28 @@ def signup():
                 "id": user_id,
                 "email": email,
                 "role": "student"
-            }
+            },
+            "status": "success"
         }), 201
         
     except Exception as e:
-        print(f"Signup error: {str(e)}")  # Debug print
-        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+        print(f"Signup error: {str(e)}")
+        return jsonify({"error": str(e), "status": "error"}), 500
 
 @app.route("/api/login", methods=["POST"])
 def login():
     try:
         data = request.get_json()
         if not data:
-            return jsonify({"error": "No data provided"}), 400
+            return jsonify({"error": "No data provided", "status": "error"}), 400
 
         email = data.get("email")
         password = data.get("password")
         
-        print(f"Login attempt - Email: {email}")  # Debug print
-        
         if not email or not password:
-            return jsonify({"error": "Email and password are required"}), 400
+            return jsonify({"error": "Email and password are required", "status": "error"}), 400
         
-        # TPO login check
+        # TPO login - fast path
         if email == "TPO@gmail.com" and password == "123":
             token = create_access_token(identity="tpo")
             return jsonify({
@@ -129,18 +142,21 @@ def login():
                     "id": "tpo",
                     "email": "TPO@gmail.com",
                     "role": "tpo"
-                }
+                },
+                "status": "success"
             })
         
-        # Regular user login
-        user = mongo.db.users.find_one({"email": email})
-        print(f"Found user: {user}")  # Debug print
+        # Optimize query with projection
+        user = db.users.find_one(
+            {"email": email},
+            {"password": 1, "email": 1, "role": 1}
+        )
         
         if not user:
-            return jsonify({"error": "User not found"}), 401
+            return jsonify({"error": "User not found", "status": "error"}), 401
         
         if not check_password_hash(user["password"], password):
-            return jsonify({"error": "Invalid password"}), 401
+            return jsonify({"error": "Invalid password", "status": "error"}), 401
         
         token = create_access_token(identity=str(user["_id"]))
         
@@ -150,26 +166,27 @@ def login():
                 "id": str(user["_id"]),
                 "email": user["email"],
                 "role": user.get("role", "student")
-            }
+            },
+            "status": "success"
         })
         
     except Exception as e:
-        print(f"Login error: {str(e)}")  # Debug print
-        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+        print(f"Login error: {str(e)}")
+        return jsonify({"error": str(e), "status": "error"}), 500
 
 @app.route("/api/analyze-resume", methods=["POST"])
 @jwt_required()
 def analyze_resume():
     try:
         if "resume" not in request.files:
-            return jsonify({"error": "No resume file provided"}), 400
+            return jsonify({"error": "No resume file provided", "status": "error"}), 400
             
         file = request.files["resume"]
         if file.filename == "":
-            return jsonify({"error": "No selected file"}), 400
+            return jsonify({"error": "No selected file", "status": "error"}), 400
             
         if not file.filename.endswith(".pdf"):
-            return jsonify({"error": "Only PDF files are allowed"}), 400
+            return jsonify({"error": "Only PDF files are allowed", "status": "error"}), 400
 
         # Read PDF content
         pdf_reader = PdfReader(io.BytesIO(file.read()))
@@ -181,18 +198,27 @@ def analyze_resume():
         
         if action == "improve":
             analysis = analyze_resume_with_llama(text, "analysis")
-            return jsonify({"result": analysis})
+            return jsonify({"result": analysis, "status": "success"})
             
         elif action == "questions":
             questions = analyze_resume_with_llama(text, "questions")
             return jsonify({
                 "questions": questions.split("\n"),
-                "resume_text": text
+                "resume_text": text,
+                "status": "success"
             })
             
         elif action == "recommend_jobs":
-            # Get all jobs from database
-            jobs = list(mongo.db.jobs.find())
+            # Get all jobs with projection to optimize query
+            jobs = list(db.jobs.find({}, {
+                "name": 1,
+                "position": 1,
+                "description": 1,
+                "requirements": 1
+            }))
+            
+            if not jobs:
+                return jsonify({"error": "No jobs available", "status": "error"}), 404
             
             # Create TF-IDF vectorizer
             vectorizer = TfidfVectorizer()
@@ -224,10 +250,10 @@ def analyze_resume():
                 for job, score in job_scores[:5]
             ]
             
-            return jsonify({"recommended_jobs": recommended_jobs})
+            return jsonify({"recommended_jobs": recommended_jobs, "status": "success"})
             
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "status": "error"}), 500
 
 @app.route("/api/interview-prep", methods=["POST"])
 @jwt_required()
@@ -239,23 +265,29 @@ def interview_prep():
         answer = data.get("answer")
         
         if not all([resume_text, question, answer]):
-            return jsonify({"error": "Missing required fields"}), 400
+            return jsonify({"error": "Missing required fields", "status": "error"}), 400
             
         feedback = analyze_resume_with_llama(
             {"question": question, "answer": answer},
             "feedback"
         )
         
-        return jsonify({"result": feedback})
+        return jsonify({"result": feedback, "status": "success"})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "status": "error"}), 500
 
 @app.route("/api/companies", methods=["GET", "POST"])
 @jwt_required()
 def handle_companies():
     try:
         if request.method == "GET":
-            companies = list(mongo.db.jobs.find())
+            # Optimize query with projection
+            companies = list(db.jobs.find({}, {
+                "name": 1,
+                "position": 1,
+                "description": 1,
+                "requirements": 1
+            }))
             return jsonify([{
                 "id": str(company["_id"]),
                 "name": company["name"],
@@ -269,13 +301,13 @@ def handle_companies():
             required_fields = ["name", "position", "description", "requirements"]
             
             if not all(field in data for field in required_fields):
-                return jsonify({"error": "Missing required fields"}), 400
+                return jsonify({"error": "Missing required fields", "status": "error"}), 400
                 
-            result = mongo.db.jobs.insert_one(data)
-            return jsonify({"id": str(result.inserted_id)}), 201
+            result = db.jobs.insert_one(data)
+            return jsonify({"id": str(result.inserted_id), "status": "success"}), 201
             
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "status": "error"}), 500
 
 def analyze_resume_with_llama(text, prompt_type="analysis"):
     prompts = {
