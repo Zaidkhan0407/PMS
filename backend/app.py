@@ -20,91 +20,107 @@ load_dotenv()
 app = Flask(__name__)
 
 # Configure MongoDB and JWT
-app.config["MONGO_URI"] = os.getenv("MONGO_URI", "mongodb+srv://your-mongodb-uri")
-app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "your-secret-key")
+app.config["MONGO_URI"] = os.getenv("MONGO_URI")
+app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
+
+print(f"MongoDB URI: {app.config['MONGO_URI']}")  # Debug print
 
 # Initialize extensions
-mongo = PyMongo(app)
+try:
+    mongo = PyMongo(app)
+    # Test the connection
+    mongo.db.command('ping')
+    print("MongoDB connection successful!")
+except Exception as e:
+    print(f"MongoDB connection error: {str(e)}")
+    raise e
+
 jwt = JWTManager(app)
 
-# Configure CORS
+# Configure CORS with more specific settings
 CORS(app, resources={
     r"/api/*": {
-        "origins": [
-            "https://671745327adbd0655aeb08b7--ai-placement-management-system.netlify.app",
-            "http://localhost:5173",
-            "http://localhost:4173"
-        ],
+        "origins": ["http://localhost:5173", "http://localhost:4173"],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
+        "allow_headers": ["Content-Type", "Authorization"],
+        "supports_credentials": True
     }
 })
 
 # Initialize Hugging Face client
 client = InferenceClient(os.getenv("HUGGINGFACE_TOKEN"))
 
-def analyze_resume_with_llama(text, prompt_type="analysis"):
-    prompts = {
-        "analysis": f"Analyze this resume and provide specific improvements:\n\n{text}",
-        "questions": f"Generate 5 relevant interview questions based on this resume:\n\n{text}",
-        "feedback": lambda answer: f"Evaluate this interview answer professionally:\n\nQuestion: {answer['question']}\nAnswer: {answer['answer']}"
-    }
-    
-    prompt = prompts[prompt_type] if isinstance(prompts[prompt_type], str) else prompts[prompt_type](text)
-    
-    response = client.text_generation(
-        prompt,
-        model="meta-llama/Llama-2-7b-chat-hf",
-        max_new_tokens=500,
-        temperature=0.7
-    )
-    return response
-
-@app.route("/")
-def home():
-    return jsonify({
-        "message": "AI Placement Management System API",
-        "status": "running",
-        "endpoints": {
-            "auth": ["/api/login", "/api/signup"],
-            "resume": ["/api/analyze-resume"],
-            "interview": ["/api/interview-prep"],
-            "jobs": ["/api/companies"]
-        }
-    })
+@app.route("/api/test", methods=["GET"])
+def test_route():
+    try:
+        # Test MongoDB connection
+        mongo.db.users.find_one({})
+        return jsonify({"message": "Backend is working correctly"}), 200
+    except Exception as e:
+        return jsonify({"error": f"Database error: {str(e)}"}), 500
 
 @app.route("/api/signup", methods=["POST"])
 def signup():
     try:
         data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
         email = data.get("email")
         password = data.get("password")
+        
+        print(f"Signup attempt - Email: {email}")  # Debug print
         
         if not email or not password:
             return jsonify({"error": "Email and password are required"}), 400
             
-        if mongo.db.users.find_one({"email": email}):
+        existing_user = mongo.db.users.find_one({"email": email})
+        if existing_user:
             return jsonify({"error": "Email already exists"}), 400
             
         hashed_password = generate_password_hash(password)
-        user = {
+        new_user = {
             "email": email,
             "password": hashed_password,
             "role": "student"
         }
         
-        mongo.db.users.insert_one(user)
-        return jsonify({"message": "User created successfully"}), 201
+        result = mongo.db.users.insert_one(new_user)
+        user_id = str(result.inserted_id)
+        
+        token = create_access_token(identity=user_id)
+        
+        print(f"User created successfully - ID: {user_id}")  # Debug print
+        
+        return jsonify({
+            "token": token,
+            "user": {
+                "id": user_id,
+                "email": email,
+                "role": "student"
+            }
+        }), 201
+        
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Signup error: {str(e)}")  # Debug print
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
 @app.route("/api/login", methods=["POST"])
 def login():
     try:
         data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
         email = data.get("email")
         password = data.get("password")
         
+        print(f"Login attempt - Email: {email}")  # Debug print
+        
+        if not email or not password:
+            return jsonify({"error": "Email and password are required"}), 400
+        
+        # TPO login check
         if email == "TPO@gmail.com" and password == "123":
             token = create_access_token(identity="tpo")
             return jsonify({
@@ -116,20 +132,30 @@ def login():
                 }
             })
         
+        # Regular user login
         user = mongo.db.users.find_one({"email": email})
-        if user and check_password_hash(user["password"], password):
-            token = create_access_token(identity=str(user["_id"]))
-            return jsonify({
-                "token": token,
-                "user": {
-                    "id": str(user["_id"]),
-                    "email": user["email"],
-                    "role": user["role"]
-                }
-            })
-        return jsonify({"error": "Invalid credentials"}), 401
+        print(f"Found user: {user}")  # Debug print
+        
+        if not user:
+            return jsonify({"error": "User not found"}), 401
+        
+        if not check_password_hash(user["password"], password):
+            return jsonify({"error": "Invalid password"}), 401
+        
+        token = create_access_token(identity=str(user["_id"]))
+        
+        return jsonify({
+            "token": token,
+            "user": {
+                "id": str(user["_id"]),
+                "email": user["email"],
+                "role": user.get("role", "student")
+            }
+        })
+        
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Login error: {str(e)}")  # Debug print
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
 @app.route("/api/analyze-resume", methods=["POST"])
 @jwt_required()
@@ -251,6 +277,23 @@ def handle_companies():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+def analyze_resume_with_llama(text, prompt_type="analysis"):
+    prompts = {
+        "analysis": f"Analyze this resume and provide specific improvements:\n\n{text}",
+        "questions": f"Generate 5 relevant interview questions based on this resume:\n\n{text}",
+        "feedback": lambda answer: f"Evaluate this interview answer professionally:\n\nQuestion: {answer['question']}\nAnswer: {answer['answer']}"
+    }
+    
+    prompt = prompts[prompt_type] if isinstance(prompts[prompt_type], str) else prompts[prompt_type](text)
+    
+    response = client.text_generation(
+        prompt,
+        model="meta-llama/Llama-2-7b-chat-hf",
+        max_new_tokens=500,
+        temperature=0.7
+    )
+    return response
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=True)
